@@ -279,8 +279,8 @@ class BossCog(commands.GroupCog, name="boss"):
             await interaction.followup.send(f"Boss battle started with {ball.country}!", ephemeral=True)
             
             # Prepare boss image file
-            extension = ball.collection_card.split(".")[-1]
-            file_location = "./admin_panel/media/" + ball.collection_card
+            extension = ball.collection_card.name.split(".")[-1]
+            file_location = "./admin_panel/media/" + ball.collection_card.name
             file = discord.File(file_location, filename=f"boss.{extension}")
             
             # Send announcement message with join button and boss image
@@ -555,8 +555,8 @@ class BossCog(commands.GroupCog, name="boss"):
         await interaction.followup.send("Round successfully started", ephemeral=True)
         
         # Prepare boss image file for attack phase
-        extension = self.bossball.wild_card.split(".")[-1]
-        file_location = "./admin_panel/media/" + self.bossball.wild_card
+        extension = self.bossball.wild_card.name.split(".")[-1]
+        file_location = "./admin_panel/media/" + self.bossball.wild_card.name
         file = discord.File(file_location, filename=f"boss.{extension}")
         
         await interaction.channel.send(
@@ -588,8 +588,8 @@ class BossCog(commands.GroupCog, name="boss"):
         await interaction.followup.send("Round successfully started", ephemeral=True)
         
         # Prepare boss image file for defend phase
-        extension = self.bossball.wild_card.split(".")[-1]
-        file_location = "./admin_panel/media/" + self.bossball.wild_card
+        extension = self.bossball.wild_card.name.split(".")[-1]
+        file_location = "./admin_panel/media/" + self.bossball.wild_card.name
         file = discord.File(file_location, filename=f"boss.{extension}")
         
         await interaction.channel.send(
