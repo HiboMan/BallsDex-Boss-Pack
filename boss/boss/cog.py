@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import logging
 import random
 import string
@@ -54,11 +55,11 @@ Interaction = discord.Interaction["BallsDexBot"]
 # 7. /boss admin conclude ends the boss battle and rewards the winner, but you can choose to have *no* winner (ADMIN ONLY)
 
 # Configuration constants
-SHINY_BUFFS = [1000,1000] # Shiny Buffs
+SHINYBUFFS = [1000,1000] # Shiny Buffs
 # ATK, HP
-MAX_STATS = [5000,5000] # Max stats a card is limited to (before buffs)
+MAXSTATS = [5000,5000] # Max stats a card is limited to (before buffs)
 # ATK, HP
-DAMAGE_RANGE = [0,2000] # Damage a boss can deal IF attack_amount has NOT been inputted in /boss admin attack.
+DAMAGERNG = [0,2000] # Damage a boss can deal IF attack_amount has NOT been inputted in /boss admin attack.
 # Min Damage, Max Damage
 
 class JoinButton(discord.ui.View):
@@ -277,13 +278,17 @@ class BossCog(commands.GroupCog, name="boss"):
             
             await interaction.followup.send(f"Boss battle started with {ball.country}!", ephemeral=True)
             
-            # Send announcement message with join button (like original)
+            # Prepare boss image file
+            extension = ball.collection_card.split(".")[-1]
+            file_location = "./admin_panel/media/" + ball.collection_card
+            file = discord.File(file_location, filename=f"boss.{extension}")
+            
+            # Send announcement message with join button and boss image
             view = JoinButton(self)
             message = await interaction.channel.send(
-                f"# The boss battle has begun! \n"
-                f"## {ball.country}\n"
-                f"**HP:** {self.bossHP}\n\n"
-                f"Click the button below to join the fight!",
+                f"# The boss battle has begun! {self.bot.get_emoji(ball.emoji_id)}\n"
+                f"-# HP: {self.bossHP}",
+                file=file,
                 view=view
             )
             view.message = message  # Store message reference
@@ -330,15 +335,15 @@ class BossCog(commands.GroupCog, name="boss"):
         self.usersinround.append([interaction.user.id, self.round])
         
         # Calculate stats with capping (like original)
-        ball_attack = min(max(ball.attack, 0), MAX_STATS[0])
-        ball_health = min(max(ball.health, 0), MAX_STATS[1])
+        ball_attack = min(max(ball.attack, 0), MAXSTATS[0])
+        ball_health = min(max(ball.health, 0), MAXSTATS[1])
         
         # Apply shiny buffs if applicable
         messageforuser = f"{ball.description(short=True, include_emoji=True, bot=self.bot)} has been selected for this round, with {ball_attack} ATK and {ball_health} HP"
         if ball.special and "✨" in messageforuser:
-            messageforuser = f"{ball.description(short=True, include_emoji=True, bot=self.bot)} has been selected for this round, with {ball_attack}+{SHINY_BUFFS[0]} ATK and {ball_health}+{SHINY_BUFFS[1]} HP"
-            ball_health += SHINY_BUFFS[1]
-            ball_attack += SHINY_BUFFS[0]
+            messageforuser = f"{ball.description(short=True, include_emoji=True, bot=self.bot)} has been selected for this round, with {ball_attack}+{SHINYBUFFS[0]} ATK and {ball_health}+{SHINYBUFFS[1]} HP"
+            ball_health += SHINYBUFFS[1]
+            ball_attack += SHINYBUFFS[0]
         
         if not self.attack:  # Boss is defending, player attacks
             self.bossHP -= ball_attack
@@ -409,40 +414,63 @@ class BossCog(commands.GroupCog, name="boss"):
         self.picking = False
         self.boss_enabled = False
         
-        # Calculate total damage per player (like original)
-        damage_totals = []
-        processed_users = []
+        # Calculate total damage per player (following inspirational code pattern)
+        test = self.usersdamage
+        test2 = []
+        total = ""
+        total2 = ""
+        totalnum = []
         
-        for damage_record in self.usersdamage:
-            user_id = damage_record[0]
-            if user_id not in processed_users:
-                total_damage = sum(record[1] for record in self.usersdamage if record[0] == user_id)
-                damage_totals.append([user_id, total_damage])
-                processed_users.append(user_id)
+        for i in range(len(test)):
+            if test[i][0] not in test2:
+                temp = 0
+                tempvalue = test[i][0]
+                test2.append(tempvalue)
+                for j in range(len(test)):
+                    if test[j][0] == tempvalue:
+                        temp += test[j][1]
+                if test[i][0] in self.users:
+                    user = await self.bot.fetch_user(int(tempvalue))
+                    total += f"{user} has dealt a total of {temp} damage!\n"
+                    totalnum.append([tempvalue, temp])
+                else:
+                    user = await self.bot.fetch_user(int(tempvalue))
+                    total2 += f"[Dead/Disqualified] {user} has dealt a total of {temp} damage!\n"
         
         # Determine winner based on selection
-        boss_winner = 0
+        bosswinner = 0
+        highest = 0
         if winner == "DMG":
-            if damage_totals:
-                boss_winner = max(damage_totals, key=lambda x: x[1])[0]
+            for k in range(len(totalnum)):
+                if totalnum[k][1] > highest:
+                    highest = totalnum[k][1]
+                    bosswinner = totalnum[k][0]
         elif winner == "LAST":
-            boss_winner = self.lasthitter
+            bosswinner = self.lasthitter
         elif winner == "RNG":
-            if damage_totals:
-                boss_winner = random.choice(damage_totals)[0]
-        # "None" means no winner
+            if len(totalnum) != 0:
+                bosswinner = totalnum[random.randint(0, len(totalnum)-1)][0]
         
-        if boss_winner == 0 or winner == "None":
+        # Create totalstats.txt file
+        stats_content = f"{total}{total2}"
+        stats_file = discord.File(
+            fp=io.StringIO(stats_content),
+            filename="totalstats.txt"
+        )
+        
+        if bosswinner == 0 or winner == "None":
             await interaction.followup.send("Boss successfully concluded", ephemeral=True)
-            await interaction.channel.send(f"# Boss has concluded\nThe boss has won the Boss Battle!")
+            await interaction.channel.send(f"# Boss has concluded {self.bot.get_emoji(self.bossball.emoji_id) if self.bossball else ''}\nThe boss has won the Boss Battle!")
+            await interaction.channel.send(file=stats_file)
             
             # Reset all battle state
             self._reset_battle_state()
             return
         
         # Reward the winner
-        await self._reward_winner(boss_winner, channel=interaction.channel)
+        await self._reward_winner(bosswinner, channel=interaction.channel)
         await interaction.followup.send("Boss successfully concluded", ephemeral=True)
+        await interaction.channel.send(file=stats_file)
         
         # Reset battle state
         self._reset_battle_state()
@@ -492,9 +520,15 @@ class BossCog(commands.GroupCog, name="boss"):
                     f"# Round {self.round} has ended {self.bot.get_emoji(self.bossball.emoji_id) if self.bossball else ''}\nThe boss has dealt {self.bossattack} damage!\n"
                 )
         
-        # Send round stats (in-memory version)
+        # Send round stats as file
         if self.currentvalue:
-            await interaction.channel.send(f"**Round Stats:**\n{self.currentvalue}")
+            # Create roundstats.txt file
+            stats_content = self.currentvalue
+            stats_file = discord.File(
+                fp=io.StringIO(stats_content),
+                filename="roundstats.txt"
+            )
+            await interaction.channel.send(file=stats_file)
         
         # Clear round data but keep round number as is
         self.currentvalue = ""
@@ -519,14 +553,21 @@ class BossCog(commands.GroupCog, name="boss"):
         await interaction.response.defer(ephemeral=True, thinking=True)
         
         await interaction.followup.send("Round successfully started", ephemeral=True)
+        
+        # Prepare boss image file for attack phase
+        extension = self.bossball.wild_card.split(".")[-1]
+        file_location = "./admin_panel/media/" + self.bossball.wild_card
+        file = discord.File(file_location, filename=f"boss.{extension}")
+        
         await interaction.channel.send(
-            f"Round {self.round}\n# {self.bossball.country} is preparing to attack!"
+            f"Round {self.round}\n# {self.bossball.country} is preparing to attack! {self.bot.get_emoji(self.bossball.emoji_id)}",
+            file=file
         )
         await interaction.channel.send(f"> Use `/boss select` to select your defending ball.\n> Your selected ball's HP will be used to defend.")
         
         self.picking = True
         self.attack = True
-        self.bossattack = attack_amount if attack_amount is not None else random.randint(DAMAGE_RANGE[0], DAMAGE_RANGE[1])
+        self.bossattack = attack_amount if attack_amount is not None else random.randint(DAMAGERNG[0], DAMAGERNG[1])
 
     @app_commands.command(name="admin_defend")
     @checks.is_staff()
@@ -545,8 +586,15 @@ class BossCog(commands.GroupCog, name="boss"):
         await interaction.response.defer(ephemeral=True, thinking=True)
         
         await interaction.followup.send("Round successfully started", ephemeral=True)
+        
+        # Prepare boss image file for defend phase
+        extension = self.bossball.wild_card.split(".")[-1]
+        file_location = "./admin_panel/media/" + self.bossball.wild_card
+        file = discord.File(file_location, filename=f"boss.{extension}")
+        
         await interaction.channel.send(
-            f"Round {self.round}\n# {self.bossball.country} is preparing to defend!"
+            f"Round {self.round}\n# {self.bossball.country} is preparing to defend! {self.bot.get_emoji(self.bossball.emoji_id)}",
+            file=file
         )
         await interaction.channel.send(f"> Use `/boss select` to select your attacking ball.\n> Your selected ball's ATK will be used to attack.")
         
