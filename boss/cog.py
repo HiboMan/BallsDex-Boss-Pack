@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import logging
 import random
-import string
 from typing import TYPE_CHECKING
 
 import discord
@@ -24,35 +23,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("ballsdex.packages.boss")
 Interaction = discord.Interaction["BallsDexBot"]
-
-# IMPORTANT NOTES, READ BEFORE USING
-# 1. YOU MUST HAVE A SPECIAL CALLED "Boss" IN YOUR DEX, THIS IS FOR REWARDING THE WINNER.
-#    MAKE IT SO THE SPECIAL'S END DATE IS 1970. RARITY MUST BE 0
-# 2. ONLY USE A COUNTRYBALL AS A BOSS in /boss start IF IT HAS BOTH THE COLLECTIBLE AND WILD CARDS STORED,
-#    OTHERWISE THIS WILL RESULT TO AN ERROR.
-#    there's a chance you may have not selected a wild card as it isn't required.
-#    Cards without wild cards do not work as a boss, as again, this will result in an error.
-#    If you are using a ball made from the admin panel for the boss, then it's fine, since admin panel requires wild card.
-# 3. You may change the shiny buffs below to suit your dex better it's defaulted at 1000 HP & 1000 ATK
-# 4. Please report all bugs to user @moofficial on discord
-# 5. Finally, make sure to add the following to your config/extra.toml file:
-#    [[ballsdex.packages]]
-#    location = "git+https://github.com/MoOfficial0000/BossPackageBD.git"
-#    path = "boss"
-#    enabled = true
-#    editable = false
-
-# HOW TO PLAY
-# Some commands can only be used by admins, these control the boss actions.
-# 1. Start the boss using /boss admin start command. (ADMINS ONLY)
-#    Choose a countryball to be the boss (required). Choose HP (Required)
-# 2. Players can join using /boss join command.
-# 3. Start a round using /boss admin defend or /boss admin attack.(ADMINS ONLY)
-#    With /boss admin attack you can choose how much attack the boss deals (Optional, Defaulted to RNG from default 0 to 2000, can be changed below)
-# 4. Players now choose an item to use against the boss using /boss select
-# 5. /boss admin end_round ends the current round and displays user permformance about the round (ADMIN ONLY)
-# 6. Step 3-5 is repeated until the boss' HP runs out, but you can end early with Step 7.
-# 7. /boss admin conclude ends the boss battle and rewards the winner, but you can choose to have *no* winner (ADMIN ONLY)
 
 # Configuration constants
 SHINYBUFFS = [1000,1000] # Shiny Buffs
@@ -223,11 +193,12 @@ class BossBattleReward(models.Model):
         return f"Reward for {self.boss_battle} - Winner: {self.winner}"
 
 
-class BossCog(commands.GroupCog, name="boss"):
+class Boss(commands.GroupCog, name="boss"):
     """Boss battle system — fight powerful bosses with your collection!"""
     
     def __init__(self, bot: BallsDexBot):
         self.bot = bot
+        
         # Boss battle state (from original BossPackageBD)
         self.boss_enabled = False
         self.bossball = None
@@ -246,15 +217,37 @@ class BossCog(commands.GroupCog, name="boss"):
         self.currentvalue = ""  # Track round actions
         
         log.info("Boss Cog initialized")
+        
+    admin = app_commands.Group(name="admin", description="Boss administration commands")
 
-    @app_commands.command(name="admin_start")
-    @app_commands.describe(
-        ball="The ball to use as boss",
-        hp_amount="HP amount for the boss"
-    )
-    @checks.is_staff()
-    async def admin_start(self, interaction: Interaction, ball: BallTransform, hp_amount: int):
-        """Start a boss battle with the specified ball"""
+    def admin_permissions_check():
+        """Custom permission check for admin commands that works with interactions"""
+        async def check(interaction: discord.Interaction["BallsDexBot"]) -> bool:
+            from users.utils import get_user_model
+            
+            try:
+                user_model = get_user_model()
+                dj_user = await user_model.objects.filter(discord_id=interaction.user.id).aget()
+                if not dj_user.is_active:
+                    return False
+                return await dj_user.ahas_perms(["bd_models.add_ballinstance"])
+            except user_model.DoesNotExist:
+                return False
+        return app_commands.check(check)
+
+    @admin.command()
+    @admin_permissions_check()
+    async def start(self, interaction: discord.Interaction["BallsDexBot"], ball: BallTransform, hp_amount: int):
+        """
+        Start a boss battle with the specified ball
+        
+        Parameters
+        ----------
+        ball: Ball
+            The ball to use as boss
+        hp_amount: int
+            HP amount for the boss
+        """
         await interaction.response.defer(ephemeral=True, thinking=True)
         
         if self.boss_enabled:
@@ -300,7 +293,14 @@ class BossCog(commands.GroupCog, name="boss"):
     
     @app_commands.command()
     async def select(self, interaction: Interaction, ball: BallInstanceTransform):
-        """Select countryball to use against the boss"""
+        """
+        Select countryball to use against the boss
+        
+        Parameters
+        ----------
+        ball: Ball
+            The ball to use for this round
+        """
         await interaction.response.defer(ephemeral=True, thinking=True)
         
         if [interaction.user.id, self.round] in self.usersinround:
@@ -340,7 +340,7 @@ class BossCog(commands.GroupCog, name="boss"):
         
         # Apply shiny buffs if applicable
         messageforuser = f"{ball.description(short=True, include_emoji=True, bot=self.bot)} has been selected for this round, with {ball_attack} ATK and {ball_health} HP"
-        if ball.special and "✨" in messageforuser:
+        if ball.special_id and "✨" in messageforuser:
             messageforuser = f"{ball.description(short=True, include_emoji=True, bot=self.bot)} has been selected for this round, with {ball_attack}+{SHINYBUFFS[0]} ATK and {ball_health}+{SHINYBUFFS[1]} HP"
             ball_health += SHINYBUFFS[1]
             ball_attack += SHINYBUFFS[0]
@@ -363,7 +363,9 @@ class BossCog(commands.GroupCog, name="boss"):
     
     @app_commands.command()
     async def ongoing(self, interaction: Interaction):
-        """Show your damage to the boss in the current fight"""
+        """
+        Show your damage to the boss in the current fight
+        """
         await interaction.response.defer(ephemeral=True, thinking=True)
         
         user_damage = 0
@@ -389,7 +391,8 @@ class BossCog(commands.GroupCog, name="boss"):
             else:
                 await interaction.followup.send(f"You have dealt {user_damage} damage and you are now dead.\n\n{damage_details}", ephemeral=True)
 
-    @app_commands.command(name="admin_conclude")
+    @admin.command()
+    @admin_permissions_check()
     @app_commands.choices(
         winner=[
             app_commands.Choice(name="Random", value="RNG"),
@@ -398,9 +401,15 @@ class BossCog(commands.GroupCog, name="boss"):
             app_commands.Choice(name="No Winner", value="None"),
         ]
     )
-    @checks.is_staff()
-    async def conclude(self, interaction: Interaction, winner: str):
-        """Finish the boss, conclude the Winner"""
+    async def conclude(self, interaction: discord.Interaction["BallsDexBot"], winner: str):
+        """
+        Finish the boss, conclude the Winner
+        
+        Parameters
+        ----------
+        winner: app_commands.Choice[str]
+            Winner selection method (RNG/DMG/LAST/None)
+        """
         await interaction.response.defer(ephemeral=True, thinking=True)
         
         if not self.boss_enabled:
@@ -475,9 +484,9 @@ class BossCog(commands.GroupCog, name="boss"):
         # Reset battle state
         self._reset_battle_state()
 
-    @app_commands.command(name="admin_end_round")
-    @checks.is_staff()
-    async def endround(self, interaction: Interaction):
+    @admin.command()
+    @admin_permissions_check()
+    async def endround(self, interaction: discord.Interaction["BallsDexBot"]):
         """End the current round"""
         await interaction.response.defer(ephemeral=True, thinking=True)
         
@@ -491,7 +500,16 @@ class BossCog(commands.GroupCog, name="boss"):
         
         self.picking = False
         
-        # Handle round ending logic (exact original format)
+        # Remove users who didn't select (applies to both attack and defend phases)
+        snapshotusers = self.users.copy()
+        for user_id in snapshotusers:
+            if [user_id, self.round] not in self.usersinround:
+                user = await self.bot.fetch_user(int(user_id))
+                if str(user) not in self.currentvalue:
+                    self.currentvalue += (str(user) + " has not selected on time and died!\n")
+                    self.users.remove(user_id)
+        
+        # Handle round ending logic
         if not self.attack:  # Boss was defending
             if int(self.bossHP) <= 0:
                 await interaction.channel.send(
@@ -502,15 +520,6 @@ class BossCog(commands.GroupCog, name="boss"):
                     f"# Round {self.round} has ended {self.bot.get_emoji(self.bossball.emoji_id) if self.bossball else ''}\nThere is {self.bossHP} HP remaining on the boss"
                 )
         else:  # Boss was attacking
-            # Remove users who didn't select (exact original logic)
-            snapshotusers = self.users.copy()
-            for user_id in snapshotusers:
-                if [user_id, self.round] not in self.usersinround:
-                    user = await self.bot.fetch_user(int(user_id))
-                    if str(user) not in self.currentvalue:
-                        self.currentvalue += (str(user) + " has not selected on time and died!\n")
-                        self.users.remove(user_id)
-            
             if len(self.users) == 0:
                 await interaction.channel.send(
                     f"# Round {self.round} has ended {self.bot.get_emoji(self.bossball.emoji_id) if self.bossball else ''}\nThe boss has dealt {self.bossattack} damage!\nThe boss has won!"
@@ -535,11 +544,19 @@ class BossCog(commands.GroupCog, name="boss"):
         
         await interaction.followup.send("Round successfully ended", ephemeral=True)
 
-    @app_commands.command(name="admin_attack")
-    @app_commands.describe(attack_amount="Custom attack amount (optional)")
-    @checks.is_staff()
-    async def attack(self, interaction: Interaction, attack_amount: int | None = None):
-        """Start a round where the Boss Attacks"""
+    @admin.command()
+    @admin_permissions_check()
+    async def attack(self, interaction: discord.Interaction["BallsDexBot"], attack_amount: int | None = None):
+        """
+        Start a round where the Boss Attacks
+        
+        Parameters
+        ----------
+        attack_amount: int
+            Custom attack amount
+        """
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
         if not self.boss_enabled:
             return await interaction.followup.send("Boss is disabled", ephemeral=True)
         if self.picking:
@@ -550,7 +567,6 @@ class BossCog(commands.GroupCog, name="boss"):
             return await interaction.followup.send("The Boss is dead", ephemeral=True)
         
         self.round += 1
-        await interaction.response.defer(ephemeral=True, thinking=True)
         
         await interaction.followup.send("Round successfully started", ephemeral=True)
         
@@ -569,10 +585,12 @@ class BossCog(commands.GroupCog, name="boss"):
         self.attack = True
         self.bossattack = attack_amount if attack_amount is not None else random.randint(DAMAGERNG[0], DAMAGERNG[1])
 
-    @app_commands.command(name="admin_defend")
-    @checks.is_staff()
-    async def defend(self, interaction: Interaction):
+    @admin.command()
+    @admin_permissions_check()
+    async def defend(self, interaction: discord.Interaction["BallsDexBot"]):
         """Start a round where the Boss Defends"""
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
         if not self.boss_enabled:
             return await interaction.followup.send("Boss is disabled", ephemeral=True)
         if self.picking:
@@ -583,7 +601,6 @@ class BossCog(commands.GroupCog, name="boss"):
             return await interaction.followup.send("The Boss is dead", ephemeral=True)
         
         self.round += 1
-        await interaction.response.defer(ephemeral=True, thinking=True)
         
         await interaction.followup.send("Round successfully started", ephemeral=True)
         
@@ -601,26 +618,28 @@ class BossCog(commands.GroupCog, name="boss"):
         self.picking = True
         self.attack = False
 
-    @app_commands.command(name="admin_disqualify")
-    @app_commands.describe(
-        user="User to disqualify",
-        user_id="User ID to disqualify", 
-        undisqualify="Set to True to remove disqualification"
-    )
-    @checks.is_staff()
+    @admin.command()
+    @admin_permissions_check()
     async def disqualify(
         self,
-        interaction: Interaction,
+        interaction: discord.Interaction["BallsDexBot"],
         user: discord.User | None = None,
         user_id: str | None = None,
         undisqualify: bool | None = False,
     ):
-        """Disqualify a member from the boss"""
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        """
+        Disqualify or undisqualify a user from the boss battle
         
-        if (user and user_id) or (not user and not user_id):
-            await interaction.followup.send("You must provide either `user` or `user_id`.", ephemeral=True)
-            return
+        Parameters
+        ----------
+        user: discord.User
+            User to disqualify
+        user_id: str
+            User ID to disqualify
+        undisqualify: bool
+            Set to True to remove disqualification
+        """
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
         if not user:
             try:
@@ -657,19 +676,24 @@ class BossCog(commands.GroupCog, name="boss"):
             self.disqualified.append(int(user_id))
             await interaction.followup.send(f"{user} has been disqualified successfully.", ephemeral=True)
 
-    @app_commands.command(name="admin_hackjoin")
-    @app_commands.describe(
-        user="User to force join",
-        user_id="User ID to force join"
-    )
-    @checks.is_staff()
+    @admin.command()
+    @admin_permissions_check()
     async def hackjoin(
         self,
-        interaction: Interaction,
+        interaction: discord.Interaction["BallsDexBot"],
         user: discord.User | None = None,
         user_id: str | None = None,
     ):
-        """Force join a user to the boss battle"""
+        """
+        Force join a user to the boss battle
+        
+        Parameters
+        ----------
+        user: discord.User
+            User to force join
+        user_id: str
+            User ID to force join
+        """
         await interaction.response.defer(ephemeral=True, thinking=True)
         
         if (user and user_id) or (not user and not user_id):
@@ -700,11 +724,17 @@ class BossCog(commands.GroupCog, name="boss"):
         await interaction.followup.send(f"{user} has been force-joined into the Boss Battle.", ephemeral=True)
         await self._log_action(f"{user} has joined the `{self.bossball}` Boss Battle. [hackjoin by {await self.bot.fetch_user(int(interaction.user.id))}]")
         
-    @app_commands.command(name="admin_ping")
-    @app_commands.describe(unselected="Only ping users who haven't selected yet")
-    @checks.is_staff()
-    async def ping(self, interaction: Interaction, unselected: bool | None = False):
-        """Ping all the alive players"""
+    @admin.command()
+    @admin_permissions_check()
+    async def ping(self, interaction: discord.Interaction["BallsDexBot"], unselected: bool | None = False):
+        """
+        Ping all the alive players
+        
+        Parameters
+        ----------
+        unselected: bool
+            Only ping users who haven't selected yet
+        """
         await interaction.response.defer(ephemeral=True, thinking=True)
         
         if len(self.users) == 0:
@@ -727,9 +757,9 @@ class BossCog(commands.GroupCog, name="boss"):
         else:
             await interaction.followup.send("Message too long, exceeds 2000 character limit", ephemeral=True)
 
-    @app_commands.command(name="admin_stats")
-    @checks.is_staff()
-    async def stats(self, interaction: Interaction):
+    @admin.command()
+    @admin_permissions_check()
+    async def stats(self, interaction: discord.Interaction["BallsDexBot"]):
         """See current stats of the boss"""
         await interaction.response.defer(ephemeral=True, thinking=True)
         
