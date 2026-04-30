@@ -1,21 +1,24 @@
-[project]
-name = "ballsdex-boss"
-version = "0.0.2"
-authors = [
-  { name="Mo Official", email="moofficial420@gmail.com" },
-]
-description = "Boss package for Ballsdex V3"
-requires-python = ">=3.12"
-dependencies = []
-
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "ballsdex-boss"
+version = "1.0.0"
+description = "Boss package for Ballsdex V3"
+license = "MIT"
+authors = [
+  { name="Mo Official", email="moofficial420@gmail.com" },
+]
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = []
+
 [project.urls]
 Repository = "https://github.com/MoOfficial0000/BossPackageBD"
+Documentation = "https://github.com/MoOfficial0000/BossPackageBD#readme"
 Issues = "https://github.com/MoOfficial0000/BossPackageBD/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["boss*"]
+include = ["boss"]
