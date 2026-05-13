@@ -67,9 +67,10 @@ class BossBattle(models.Model):
     """Active boss battle configuration"""
     ball_instance = models.OneToOneField(
         "bd_models.BallInstance",
-        related_name="boss_battle",
+        related_name="+",
         help_text="The ball instance acting as the boss",
-        on_delete=models.CASCADE
+        on_delete=models.DO_NOTHING,
+        db_constraint=False
     )
     max_hp = models.IntegerField(default=1000, help_text="Maximum HP of boss")
     current_hp = models.IntegerField(default=1000, help_text="Current HP of boss")
@@ -91,9 +92,10 @@ class BossBattleParticipant(models.Model):
     )
     player = models.ForeignKey(
         "bd_models.Player",
-        related_name="boss_battles",
+        related_name="+",
         help_text="The player participating",
-        on_delete=models.CASCADE
+        on_delete=models.DO_NOTHING,
+        db_constraint=False
     )
     joined_at = models.DateTimeField(auto_now_add=True)
     total_damage_dealt = models.IntegerField(default=0, help_text="Total damage dealt by this participant")
@@ -144,9 +146,10 @@ class BossRoundAction(models.Model):
     )
     ball_used = models.ForeignKey(
         "bd_models.BallInstance",
-        related_name="boss_actions",
+        related_name="+",
         help_text="The ball instance used in this action",
-        on_delete=models.CASCADE
+        on_delete=models.DO_NOTHING,
+        db_constraint=False
     )
     damage_dealt = models.IntegerField(help_text="Damage dealt by this action")
     action_type = models.CharField(
@@ -175,17 +178,19 @@ class BossBattleReward(models.Model):
     )
     winner = models.ForeignKey(
         "bd_models.Player",
-        related_name="boss_wins",
+        related_name="+",
         help_text="The player who won the boss battle",
-        on_delete=models.SET_NULL,
+        on_delete=models.DO_NOTHING,
+        db_constraint=False,
         null=True,
         blank=True
     )
     reward_ball = models.ForeignKey(
         "bd_models.BallInstance",
-        related_name="boss_reward_for",
+        related_name="+",
         help_text="The ball instance given as reward",
-        on_delete=models.CASCADE
+        on_delete=models.DO_NOTHING,
+        db_constraint=False
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -215,6 +220,7 @@ class Boss(commands.GroupCog, name="boss"):
         self.disqualified = []  # Track disqualified users
         self.lasthitter = 0  # Track last person to hit boss
         self.currentvalue = ""  # Track round actions
+        self.pending_selections: dict[int, BallInstance] = {}
         
         log.info("Boss Cog initialized")
         
@@ -268,6 +274,7 @@ class Boss(commands.GroupCog, name="boss"):
             self.round = 0  # Start at 0 like original
             self.picking = False  # Don't start picking immediately
             self.attack = True
+            self.pending_selections = {}
             
             await interaction.followup.send(f"Boss battle started with {ball.country}!", ephemeral=True)
             
@@ -330,6 +337,9 @@ class Boss(commands.GroupCog, name="boss"):
                 f"You cannot select the same ball twice", ephemeral=True
             )
         
+        # Store the selection for processing in endround
+        self.pending_selections[interaction.user.id] = ball
+        
         # Add to selected balls and track round participation
         self.balls.append(ball)
         self.usersinround.append([interaction.user.id, self.round])
@@ -342,20 +352,6 @@ class Boss(commands.GroupCog, name="boss"):
         messageforuser = f"{ball.description(short=True, include_emoji=True, bot=self.bot)} has been selected for this round, with {ball_attack} ATK and {ball_health} HP"
         if ball.special_id and "✨" in messageforuser:
             messageforuser = f"{ball.description(short=True, include_emoji=True, bot=self.bot)} has been selected for this round, with {ball_attack}+{SHINYBUFFS[0]} ATK and {ball_health}+{SHINYBUFFS[1]} HP"
-            ball_health += SHINYBUFFS[1]
-            ball_attack += SHINYBUFFS[0]
-        
-        if not self.attack:  # Boss is defending, player attacks
-            self.bossHP -= ball_attack
-            self.usersdamage.append([interaction.user.id, ball_attack, ball.description(short=True, include_emoji=True, bot=self.bot)])
-            self.currentvalue += f"{interaction.user}'s {ball.description(short=True, bot=self.bot)} has dealt {ball_attack} damage!\n"
-            self.lasthitter = interaction.user.id
-        else:  # Boss is attacking, player defends
-            if self.bossattack >= ball_health:
-                self.users.remove(interaction.user.id)
-                self.currentvalue += f"{interaction.user}'s {ball.description(short=True, bot=self.bot)} had {ball_health}HP and died!\n"
-            else:
-                self.currentvalue += f"{interaction.user}'s {ball.description(short=True, bot=self.bot)} had {ball_health}HP and survived!\n"
         
         await interaction.followup.send(messageforuser, ephemeral=True)
         await self._log_action(f"-# Round {self.round}\n{interaction.user}'s {messageforuser}\n-# -------")
@@ -500,7 +496,48 @@ class Boss(commands.GroupCog, name="boss"):
         
         self.picking = False
         
+        # Process selections and verify they still exist/aren't deleted
+        for user_id, ball in list(self.pending_selections.items()):
+            # Verification check
+            if not await BallInstance.objects.filter(pk=ball.pk, deleted=False).aexists():
+                # Ball was deleted or soft-deleted!
+                # Remove from battle memory as if it never existed
+                if ball in self.balls:
+                    self.balls.remove(ball)
+                if [user_id, self.round] in self.usersinround:
+                    self.usersinround.remove([user_id, self.round])
+                del self.pending_selections[user_id]
+                continue
+            
+            # Ball exists, process results
+            ball_attack = min(max(ball.attack, 0), MAXSTATS[0])
+            ball_health = min(max(ball.health, 0), MAXSTATS[1])
+            
+            # Re-check shiny buffs for logic
+            ball_desc = ball.description(short=True, include_emoji=True, bot=self.bot)
+            if ball.special_id and "✨" in ball_desc:
+                ball_health += SHINYBUFFS[1]
+                ball_attack += SHINYBUFFS[0]
+            
+            if not self.attack:  # Boss is defending, players attack
+                self.bossHP -= ball_attack
+                self.usersdamage.append([user_id, ball_attack, ball_desc])
+                self.currentvalue += f"{await self.bot.fetch_user(user_id)}'s {ball.description(short=True, bot=self.bot)} has dealt {ball_attack} damage!\n"
+                self.lasthitter = user_id
+            else:  # Boss is attacking, players defend
+                user_obj = await self.bot.fetch_user(user_id)
+                if self.bossattack >= ball_health:
+                    if user_id in self.users:
+                        self.users.remove(user_id)
+                    self.currentvalue += f"{user_obj}'s {ball.description(short=True, bot=self.bot)} had {ball_health}HP and died!\n"
+                else:
+                    self.currentvalue += f"{user_obj}'s {ball.description(short=True, bot=self.bot)} had {ball_health}HP and survived!\n"
+
+        # Clear pending selections for next round
+        self.pending_selections = {}
+        
         # Remove users who didn't select (applies to both attack and defend phases)
+        # This will also catch users whose balls were deleted above
         snapshotusers = self.users.copy()
         for user_id in snapshotusers:
             if [user_id, self.round] not in self.usersinround:
@@ -842,6 +879,7 @@ Damage Records: {len(self.usersdamage)}"""
         self.bossball = None
         self.disqualified = []
         self.lasthitter = 0
+        self.pending_selections = {}
 
     async def _log_action(self, message: str):
         """Log boss actions to console and webhook (BallsDex V3 pattern)"""
