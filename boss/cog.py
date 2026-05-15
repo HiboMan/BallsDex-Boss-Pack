@@ -14,7 +14,7 @@ from django.utils import timezone
 from bd_models.models import Ball, BallInstance, Player
 from bd_models.models import balls as balls_cache
 from bd_models.models import specials
-from ballsdex.core.utils.transformers import BallTransform, BallInstanceTransform
+from ballsdex.core.utils.transformers import BallTransform, BallInstanceTransform, BallEnabledTransform
 from ballsdex.core.utils import checks
 from ballsdex.settings import settings
 
@@ -246,7 +246,7 @@ class Boss(commands.GroupCog, name="boss"):
 
     @admin.command()
     @admin_permissions_check()
-    async def start(self, interaction: discord.Interaction["BallsDexBot"], ball: BallTransform, hp_amount: int):
+    async def start(self, interaction: discord.Interaction["BallsDexBot"], ball: BallEnabledTransform, hp_amount: int):
         """
         Start a boss battle with the specified ball
         
