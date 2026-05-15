@@ -56,6 +56,9 @@ class JoinButton(discord.ui.View):
         
         if interaction.user.id in self.boss_cog.users:
             return await interaction.followup.send("You have already joined the boss", ephemeral=True)
+            
+        if self.boss_cog.round > 0 or self.boss_cog.picking:
+            return await interaction.followup.send("The boss battle has already started", ephemeral=True)
         
         self.boss_cog.users.append(interaction.user.id)
         await interaction.followup.send("You have joined the Boss Battle!", ephemeral=True)
@@ -848,7 +851,7 @@ Damage Records: {len(self.usersdamage)}"""
                 )
                 bosswinner_user = await self.bot.fetch_user(int(bosswinner))
                 await self._log_action(f"`BOSS REWARDS` gave {settings.collectible_name} {self.bossball} to {bosswinner_user}. "
-                f"Special=Boss"
+                f"Special=Boss "
                 f"ATK=0 HP=0")
                 
                 # Send announcement message (like original)
